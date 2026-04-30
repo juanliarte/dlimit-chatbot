@@ -59,14 +59,24 @@ SYSTEM_PROMPT = """Eres el asistente conversacional de Dlimit Tactic S.L.,
 empresa española (Mataró) especializada en postes separadores y barreras
 retráctiles para gestión de colas y delimitación de espacios B2B.
 
-Reglas:
+REGLA DE IDIOMA (prioridad máxima):
+- Detecta el idioma del último mensaje del cliente y responde SIEMPRE en ese
+  mismo idioma. Soporta como mínimo: español, inglés, francés, alemán,
+  italiano, portugués y catalán.
+- Si el mensaje es muy corto o ambiguo (un saludo como "hello", "ok", "hi"...),
+  responde en el idioma de ese saludo. Ej: "hello" → respuesta en inglés.
+- Solo si el idioma es realmente imposible de determinar, usa español.
+
+Reglas de contenido:
 - Responde solo con información presente en el contexto proporcionado.
-- Cita las fuentes entre corchetes como aparecen ([1], [2], …).
-- Si la información no está en el contexto, di "No tengo esa información en mi base de conocimiento" y ofrece contactar al equipo comercial.
+- NUNCA incluyas referencias numéricas tipo [1], [2], (fuente 3), etc. en la
+  respuesta. Integra la información de forma natural sin marcadores.
+- Si la información no está en el contexto, dilo amablemente y ofrece contactar
+  al equipo comercial en info@dlimit.es.
 - Tono: profesional, directo, técnico cuando hace falta, comercialmente útil.
 - No inventes referencias, modelos, precios ni ensayos.
-- Idioma: el del cliente (por defecto español).
-- Formato: markdown ligero (negrita en lo importante, listas si aplica)."""
+- Formato: markdown ligero (negrita en lo importante, listas si aplica).
+- Respuestas concisas: ve al grano, sin preámbulos innecesarios."""
 
 
 def hybrid_search(question: str, top_k: int = TOP_K, layer: str = "publica"):
@@ -87,6 +97,34 @@ def hybrid_search(question: str, top_k: int = TOP_K, layer: str = "publica"):
         with_payload=True,
     )
     return res.points
+
+
+def fallback_no_context(question: str) -> str:
+    """Genera una respuesta breve en el idioma del cliente cuando no hay contexto."""
+    resp = claude.messages.create(
+        model=CLAUDE_MODEL,
+        max_tokens=180,
+        system=(
+            "Responde SIEMPRE en el mismo idioma que el mensaje del cliente "
+            "(español, inglés, francés, alemán, italiano, portugués o catalán). "
+            "Si es un saludo como 'hello', responde en ese idioma. "
+            "Sé breve, cordial y profesional. NUNCA uses marcadores [1], [2] ni similares."
+        ),
+        messages=[{
+            "role": "user",
+            "content": (
+                f"Mensaje del cliente: \"{question}\"\n\n"
+                "Si es un saludo o pregunta general, salúdale brevemente y "
+                "preséntate como el asistente de Dlimit Tactic, especialista "
+                "en postes separadores y barreras retráctiles, e invítale a "
+                "preguntar sobre productos, materiales o sectores. "
+                "Si pregunta algo concreto que no puedes responder, dile amablemente "
+                "que no tienes esa información y que puede contactar a info@dlimit.es. "
+                "Todo en el idioma del cliente."
+            ),
+        }],
+    )
+    return resp.content[0].text
 
 
 app = Flask(__name__)
@@ -121,15 +159,16 @@ def api_chat():
         }
         sources.append(src)
         loc = f"{pl.get('source','?')}, p.{pl.get('page','?')}"
-        context_parts.append(f"[{i}] ({loc}) {pl.get('text','')}")
+        context_parts.append(f"({loc}) {pl.get('text','')}")
 
     if not points:
-        return jsonify({"answer": "No tengo información sobre eso en mi base de conocimiento. ¿Puedes contactar a nuestro equipo comercial?", "sources": []})
+        return jsonify({"answer": fallback_no_context(question), "sources": []})
 
     user_msg = (
-        f"Pregunta del cliente:\n{question}\n\n"
-        f"Contexto KB Dlimit:\n" + "\n\n".join(context_parts) +
-        f"\n\nResponde basándote SOLO en el contexto. Cita con [n]."
+        f"Customer message (respond in the SAME language as this message):\n"
+        f"{question}\n\n"
+        f"Knowledge base context (Dlimit):\n" + "\n\n".join(context_parts) +
+        f"\n\nUse ONLY the context above. Do NOT add reference markers like [1], [2]."
     )
     resp = claude.messages.create(
         model=CLAUDE_MODEL,
@@ -150,83 +189,153 @@ HTML_PAGE = r"""<!doctype html>
 <head>
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width,initial-scale=1" />
-<title>Dlimit · Asistente IA · Demo</title>
+<title>Dlimit</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600&display=swap" rel="stylesheet">
 <style>
   :root {
-    --primary:#1F3A5F; --accent:#2E75B6; --bg:#F5F7FA; --card:#fff;
-    --muted:#6b6b6b; --border:#e2e6ea; --user:#E8F0FB; --bot:#fff;
+    --accent:#2A9D2A;
+    --ink:#111;
+    --muted:#8a8a8a;
+    --rule:#ececec;
+    --bg:#fff;
+    --user-bg:#f4f4f4;
   }
   *{box-sizing:border-box}
-  body{margin:0;font-family:-apple-system,Segoe UI,Roboto,sans-serif;background:var(--bg);color:#222;height:100vh;display:flex;flex-direction:column}
-  header{background:var(--primary);color:#fff;padding:14px 22px;display:flex;align-items:center;gap:14px}
-  header h1{margin:0;font-size:18px;font-weight:700;letter-spacing:.5px}
-  header .badge{background:var(--accent);padding:3px 10px;border-radius:12px;font-size:12px}
-  header .meta{margin-left:auto;font-size:13px;opacity:.85}
-  main{flex:1;overflow:hidden;display:grid;grid-template-columns:1fr 320px;max-width:1400px;width:100%;margin:0 auto;padding:18px;gap:18px}
-  #chat{background:var(--card);border:1px solid var(--border);border-radius:14px;display:flex;flex-direction:column;overflow:hidden}
-  #messages{flex:1;overflow-y:auto;padding:22px}
-  .msg{margin:14px 0;padding:14px 16px;border-radius:14px;line-height:1.55;max-width:85%;white-space:pre-wrap}
-  .msg.user{background:var(--user);margin-left:auto;border-bottom-right-radius:4px}
-  .msg.bot{background:var(--bot);border:1px solid var(--border);border-bottom-left-radius:4px}
-  .msg.bot strong{color:var(--primary)}
-  .msg.thinking{font-style:italic;color:var(--muted);background:transparent;border:1px dashed var(--border)}
-  .form{display:flex;gap:10px;padding:14px;border-top:1px solid var(--border);background:#fafbfc}
-  textarea{flex:1;border:1px solid var(--border);border-radius:10px;padding:10px 12px;font-size:14px;font-family:inherit;resize:none;height:48px}
-  button{background:var(--primary);color:#fff;border:0;border-radius:10px;padding:0 20px;font-size:14px;font-weight:600;cursor:pointer}
-  button:disabled{opacity:.5;cursor:not-allowed}
-  .examples{padding:10px 22px;border-top:1px solid var(--border);background:#fafbfc;display:flex;gap:8px;flex-wrap:wrap}
-  .ex{background:#fff;border:1px solid var(--border);border-radius:8px;padding:6px 12px;font-size:12px;cursor:pointer;color:var(--primary)}
-  .ex:hover{background:var(--user)}
-  aside{background:var(--card);border:1px solid var(--border);border-radius:14px;overflow-y:auto;padding:18px}
-  aside h3{margin:0 0 12px 0;font-size:14px;color:var(--primary);text-transform:uppercase;letter-spacing:1px}
-  .src{border:1px solid var(--border);border-radius:10px;padding:10px;margin-bottom:10px;font-size:12px;line-height:1.5}
-  .src .head{display:flex;justify-content:space-between;align-items:center;margin-bottom:6px}
-  .src .num{background:var(--accent);color:#fff;border-radius:50%;width:20px;height:20px;display:inline-flex;align-items:center;justify-content:center;font-weight:700;font-size:11px;margin-right:6px}
-  .src .score{color:var(--muted);font-size:11px}
-  .src .title{font-weight:600;color:var(--primary);margin-bottom:4px}
-  .src .meta{color:var(--muted);font-size:11px;margin-bottom:6px}
-  .src .snippet{color:#444}
-  .stats{font-size:11px;color:var(--muted);padding:8px 12px;background:#f0f4f8;border-radius:8px;margin-top:14px}
-  .empty{color:var(--muted);font-size:13px;text-align:center;padding:30px 14px}
+  html,body{height:100%}
+  body{
+    margin:0;
+    font-family:'Inter',-apple-system,BlinkMacSystemFont,'Helvetica Neue',Arial,sans-serif;
+    font-weight:400;
+    font-size:15px;
+    line-height:1.6;
+    color:var(--ink);
+    background:var(--bg);
+    -webkit-font-smoothing:antialiased;
+  }
+  .wrap{
+    max-width:680px;
+    margin:0 auto;
+    height:100vh;
+    display:flex;
+    flex-direction:column;
+    padding:0 24px;
+  }
+  #messages{
+    flex:1;
+    overflow-y:auto;
+    padding:48px 0 24px;
+  }
+  .empty{
+    color:var(--muted);
+    font-size:15px;
+    line-height:1.6;
+    padding:80px 0 0;
+    max-width:420px;
+  }
+  .empty strong{color:var(--ink);font-weight:500}
+  .msg{
+    margin:0 0 28px;
+    line-height:1.65;
+    white-space:pre-wrap;
+    font-size:15px;
+  }
+  .msg.user{
+    background:var(--user-bg);
+    padding:12px 16px;
+    border-radius:14px;
+    margin-left:auto;
+    max-width:80%;
+    width:fit-content;
+  }
+  .msg.bot{
+    color:var(--ink);
+    padding:0;
+  }
+  .msg.bot strong{font-weight:600}
+  .msg.bot h3,.msg.bot h4{
+    font-weight:600;
+    margin:18px 0 6px;
+    font-size:15px;
+  }
+  .msg.bot ul,.msg.bot ol{padding-left:20px;margin:8px 0}
+  .msg.bot li{margin:4px 0}
+  .msg.thinking{
+    color:var(--muted);
+    font-size:14px;
+  }
+  .dots{display:inline-block}
+  .dots span{
+    display:inline-block;
+    width:4px;height:4px;
+    border-radius:50%;
+    background:var(--muted);
+    margin:0 2px;
+    animation:b 1.4s infinite;
+  }
+  .dots span:nth-child(2){animation-delay:.2s}
+  .dots span:nth-child(3){animation-delay:.4s}
+  @keyframes b{0%,80%,100%{opacity:.2}40%{opacity:1}}
+
+  form{
+    border-top:1px solid var(--rule);
+    padding:18px 0 24px;
+    display:flex;
+    gap:12px;
+    align-items:flex-end;
+    background:var(--bg);
+  }
+  textarea{
+    flex:1;
+    border:0;
+    outline:0;
+    resize:none;
+    font:inherit;
+    font-size:15px;
+    color:var(--ink);
+    padding:10px 0;
+    min-height:24px;
+    max-height:200px;
+    background:transparent;
+    line-height:1.5;
+  }
+  textarea::placeholder{color:var(--muted)}
+  button{
+    border:0;
+    background:var(--accent);
+    color:#fff;
+    width:36px;height:36px;
+    border-radius:50%;
+    cursor:pointer;
+    display:flex;align-items:center;justify-content:center;
+    transition:opacity .15s;
+    flex-shrink:0;
+  }
+  button:hover{opacity:.85}
+  button:disabled{opacity:.3;cursor:not-allowed}
+  button svg{width:16px;height:16px}
 </style>
 </head>
 <body>
-<header>
-  <h1>Dlimit · Asistente IA</h1>
-  <span class="badge">demo · capa pública</span>
-  <span class="meta">Powered by Claude + Voyage + Qdrant · Sesión 1</span>
-</header>
-<main>
-  <div id="chat">
-    <div id="messages">
-      <div class="empty">
-        Hazme una pregunta sobre productos, materiales, casos de uso, instalación o sectores.<br>
-        El sistema busca en 360 chunks de la KB Dlimit y responde citando fuentes.
-      </div>
+<div class="wrap">
+  <div id="messages">
+    <div class="empty">
+      Asistente <strong>Dlimit</strong>. Pregunta lo que quieras sobre productos, materiales, instalación o sectores.
     </div>
-    <div class="examples">
-      <span class="ex" onclick="sendExample('Necesito 10 postes para un aeropuerto en zona costera. ¿Qué material recomiendas?')">Aeropuerto costero</span>
-      <span class="ex" onclick="sendExample('¿Cómo elijo el poste según el sector?')">Elegir según sector</span>
-      <span class="ex" onclick="sendExample('Mantenimiento de postes separadores')">Mantenimiento</span>
-      <span class="ex" onclick="sendExample('Diferencia entre Skipper y poste metálico')">Skipper vs metálico</span>
-      <span class="ex" onclick="sendExample('Personalización de cintas con sublimación CMYK')">Cintas CMYK</span>
-      <span class="ex" onclick="sendExample('¿Tienen postes para hostelería?')">Hostelería</span>
-    </div>
-    <form id="form" class="form" onsubmit="return ask(event)">
-      <textarea id="q" placeholder="Escribe tu pregunta y pulsa Enter…" required></textarea>
-      <button type="submit" id="send">Enviar</button>
-    </form>
   </div>
-  <aside id="sidebar">
-    <h3>Fuentes recuperadas</h3>
-    <div id="sources"><div class="empty">Las fuentes citadas aparecerán aquí.</div></div>
-  </aside>
-</main>
+  <form id="form" onsubmit="return ask(event)">
+    <textarea id="q" placeholder="Escribe tu pregunta…" required rows="1"></textarea>
+    <button type="submit" id="send" aria-label="Enviar">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="19" x2="12" y2="5"></line><polyline points="5 12 12 5 19 12"></polyline></svg>
+    </button>
+  </form>
+</div>
 <script>
 const messages = document.getElementById('messages');
-const sourcesDiv = document.getElementById('sources');
 const q = document.getElementById('q');
 const send = document.getElementById('send');
+const empty = document.querySelector('.empty');
 
 function add(role, html, cls=''){
   const d = document.createElement('div');
@@ -241,46 +350,33 @@ function fmt(text){
   return text
     .replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;')
     .replace(/\*\*(.+?)\*\*/g,'<strong>$1</strong>')
-    .replace(/\[(\d+)\]/g,'<sup style="color:var(--accent);font-weight:700">[$1]</sup>')
-    .replace(/^# (.+)$/gm,'<h3 style="margin:8px 0;color:var(--primary)">$1</h3>')
-    .replace(/^## (.+)$/gm,'<h4 style="margin:6px 0;color:var(--primary)">$1</h4>');
+    .replace(/^### (.+)$/gm,'<h4>$1</h4>')
+    .replace(/^## (.+)$/gm,'<h3>$1</h3>')
+    .replace(/^# (.+)$/gm,'<h3>$1</h3>')
+    .replace(/^\s*[-*]\s+(.+)$/gm,'<li>$1</li>')
+    .replace(/(<li>.*?<\/li>)(?:\n(?=<li>))/gs,'$1')
+    .replace(/((?:<li>.*?<\/li>\s*)+)/gs,'<ul>$1</ul>');
 }
 
-function renderSources(srcs, tokens){
-  if(!srcs.length){ sourcesDiv.innerHTML='<div class="empty">Sin fuentes</div>'; return; }
-  let html = '';
-  for(const s of srcs){
-    const link = s.url ? `<a href="${s.url}" target="_blank" style="color:var(--accent);text-decoration:none">↗ ver</a>` : '';
-    html += `<div class="src">
-      <div class="head">
-        <div><span class="num">${s.n}</span><strong>${s.doc_type}</strong> · p.${s.page}</div>
-        <span class="score">score ${s.score}</span>
-      </div>
-      <div class="title">${s.title}</div>
-      <div class="meta">${s.source} ${link}</div>
-      <div class="snippet">${s.snippet}…</div>
-    </div>`;
-  }
-  if(tokens){
-    html += `<div class="stats">Tokens: in=${tokens.in} · out=${tokens.out}</div>`;
-  }
-  sourcesDiv.innerHTML = html;
+function autoresize(){
+  q.style.height='auto';
+  q.style.height = Math.min(q.scrollHeight, 200)+'px';
 }
 
 async function ask(e){
   if(e) e.preventDefault();
   const text = q.value.trim();
   if(!text) return false;
-  add('user', fmt(text));
-  q.value='';
+  if(empty && empty.parentNode) empty.remove();
+  add('user', text.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'));
+  q.value=''; autoresize();
   send.disabled=true;
-  const thinking = add('bot', 'Pensando…', 'thinking');
+  const thinking = add('bot', '<span class="dots"><span></span><span></span><span></span></span>', 'thinking');
   try{
     const r = await fetch('/api/chat', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({question:text})});
     const data = await r.json();
     thinking.remove();
     add('bot', fmt(data.answer));
-    renderSources(data.sources||[], data.tokens);
   }catch(err){
     thinking.remove();
     add('bot', '<em>Error: '+err.message+'</em>');
@@ -290,11 +386,7 @@ async function ask(e){
   return false;
 }
 
-function sendExample(text){
-  q.value = text;
-  ask();
-}
-
+q.addEventListener('input', autoresize);
 q.addEventListener('keydown', e=>{
   if(e.key==='Enter' && !e.shiftKey){ e.preventDefault(); ask(); }
 });
