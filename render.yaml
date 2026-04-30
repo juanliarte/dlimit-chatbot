@@ -1,0 +1,20 @@
+services:
+  - type: web
+    name: dlimit-chatbot
+    runtime: python
+    region: frankfurt
+    plan: starter
+    buildCommand: "pip install --upgrade pip && pip install -r requirements.txt"
+    startCommand: "gunicorn chatbot_server:app --bind 0.0.0.0:$PORT --workers 1 --threads 4 --timeout 60"
+    healthCheckPath: /
+    envVars:
+      - key: PYTHON_VERSION
+        value: "3.12.7"
+      - key: ANTHROPIC_API_KEY
+        sync: false
+      - key: VOYAGE_API_KEY
+        sync: false
+      - key: QDRANT_URL
+        sync: false
+      - key: QDRANT_API_KEY
+        sync: false
