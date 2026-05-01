@@ -519,11 +519,23 @@ def api_chat():
         f"\n\nUse ONLY the context above. Do NOT add reference markers like [1], [2]."
         f" Follow the commercial advisor logic: understand, guide, accompany with PDF if helpful, close."
     )
+    # Construir array de mensajes con historial conversacional
+    history = data.get("history") or []
+    valid_history = []
+    if isinstance(history, list):
+        for msg in history[-14:]:  # max 14 turnos previos
+            if isinstance(msg, dict):
+                role = msg.get("role")
+                content_msg = msg.get("content")
+                if role in ("user", "assistant") and isinstance(content_msg, str) and content_msg.strip():
+                    valid_history.append({"role": role, "content": content_msg.strip()[:4000]})
+    messages_for_claude = valid_history + [{"role": "user", "content": user_msg}]
+
     resp = claude.messages.create(
         model=CLAUDE_MODEL,
         max_tokens=900,
         system=SYSTEM_PROMPT,
-        messages=[{"role": "user", "content": user_msg}],
+        messages=messages_for_claude,
     )
     answer_text = resp.content[0].text
 
@@ -533,12 +545,16 @@ def api_chat():
         _target_email = _email_marker.group(1).strip().rstrip('.,;:')
         if "@" in _target_email and "." in _target_email.split("@")[-1]:
             try:
+                # Construir resumen con todo el historial conversacional
+                _summary_parts = []
+                for _m in valid_history[-8:]:
+                    _prefix = "Cliente" if _m["role"] == "user" else "Bot"
+                    _summary_parts.append(f"{_prefix}: {_m['content'][:300]}")
+                _summary_parts.append(f"Cliente: {question}")
+                _summary_parts.append(f"Bot: {answer_text[:400]}")
                 send_info_email(
                     client_email=_target_email,
-                    conversation_summary=(
-                        f"Pregunta del cliente:\n{question}\n\n"
-                        f"Respuesta del bot:\n{answer_text[:800]}"
-                    ),
+                    conversation_summary="\n".join(_summary_parts),
                     detected_language="es",
                     source="chat",
                     blocking=False,
@@ -803,6 +819,10 @@ function autoresize(){
   q.style.height = Math.min(q.scrollHeight, 200)+'px';
 }
 
+// Historial de conversacion (se mantiene en memoria mientras la pestana este abierta)
+let conversationHistory = [];
+const MAX_HISTORY = 14;  // ultimos 14 turnos = 7 user + 7 assistant
+
 async function ask(e){
   if(e) e.preventDefault();
   const text = q.value.trim();
@@ -813,10 +833,24 @@ async function ask(e){
   send.disabled=true;
   const thinking = add('bot', '<span class="dots"><span></span><span></span><span></span></span>', 'thinking');
   try{
-    const r = await fetch('/api/chat', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({question:text})});
+    // Enviar historial de los turnos anteriores (no incluye el mensaje actual)
+    const historyToSend = conversationHistory.slice(-MAX_HISTORY);
+    const r = await fetch('/api/chat', {
+      method:'POST',
+      headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({question: text, history: historyToSend})
+    });
     const data = await r.json();
     thinking.remove();
-    add('bot', fmt(data.answer));
+    const answer = data.answer || '';
+    add('bot', fmt(answer));
+    // Guardar este turno en el historial
+    conversationHistory.push({role: 'user', content: text});
+    conversationHistory.push({role: 'assistant', content: answer});
+    // Limitar tamano del array para no acumular sin fin
+    if (conversationHistory.length > MAX_HISTORY * 2) {
+      conversationHistory = conversationHistory.slice(-MAX_HISTORY * 2);
+    }
   }catch(err){
     thinking.remove();
     add('bot', '<em>Error: '+err.message+'</em>');
