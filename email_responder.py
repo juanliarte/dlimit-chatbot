@@ -64,12 +64,34 @@ BCC_EMAIL          = os.environ.get("BCC_EMAIL", "juanliarte@gmail.com")
 
 CATALOG_PDF_URL    = os.environ.get(
     "CATALOG_PDF_URL",
-    "https://www.dlimit.net/catalogos/catalogo-general-dlimit.pdf",
+    "https://www.dlimit.net/catalogos/general/DLimit_Catalogo_2024-25.pdf",
 )
 TARIFA_PDF_URL     = os.environ.get(
     "TARIFA_PDF_URL",
-    "https://www.dlimit.net/catalogos/tarifa-pvp-dlimit-2026.pdf",
+    "https://www.dlimit.net/catalogos/tarifas/DLimit_Tarifa_June_2025_NAC.pdf",
 )
+
+# Catálogos por familia (públicos en dlimit.net). Cuando el cliente llega
+# desde una página de familia (data-family="dclassic"), enviamos el catálogo
+# de esa familia + la tarifa. Si no hay familia detectada, mandamos el
+# catálogo general + tarifa.
+_FAMILY_CATALOG_URLS = {
+    "dbasic":     "https://www.dlimit.net/catalogos/catalogos%20familia/Catalogo-Dbasic-ES.pdf",
+    "dstandard":  "https://www.dlimit.net/catalogos/catalogos%20familia/Catalogo-Dstandard-ES.pdf",
+    "dclassic":   "https://www.dlimit.net/catalogos/catalogos%20familia/Catalogo-Dclassic-ES.pdf",
+    "dline":      "https://www.dlimit.net/catalogos/catalogos%20familia/Catalogo-Dline-ES.pdf",
+    "dsafety":    "https://www.dlimit.net/catalogos/catalogos%20familia/Catalogo-Dsafety-ES.pdf",
+    "dterminal":  "https://www.dlimit.net/catalogos/catalogos%20familia/Catalogo-Dterminal-ES.pdf",
+    "dlimit":     "https://www.dlimit.net/catalogos/catalogos%20familia/Catalogo-Dlimit-ES.pdf",
+    "esdsafety":  "https://www.dlimit.net/catalogos/catalogos%20familia/Catalogo-ESDsafety-ES.pdf",
+}
+
+def _resolve_catalog_for_family(family):
+    """Devuelve la URL del catálogo de familia, o el general si la familia no está mapeada."""
+    if not family:
+        return CATALOG_PDF_URL
+    fam_clean = family.strip().lower()
+    return _FAMILY_CATALOG_URLS.get(fam_clean, CATALOG_PDF_URL)
 
 CLAUDE_BODY_MODEL  = os.environ.get("CLAUDE_BODY_MODEL", "claude-haiku-4-5")
 BREVO_API_URL      = "https://api.brevo.com/v3/smtp/email"
@@ -213,10 +235,15 @@ def _send_via_brevo(
     to_name: Optional[str],
     subject: str,
     html_content: str,
+    catalog_url: Optional[str] = None,
+    catalog_name: Optional[str] = None,
 ) -> dict:
     """POST a Brevo /v3/smtp/email con adjuntos por URL."""
     if not BREVO_API_KEY:
         raise RuntimeError("Falta BREVO_API_KEY")
+
+    catalog_url = catalog_url or CATALOG_PDF_URL
+    catalog_name = catalog_name or "Catalogo-Dlimit.pdf"
 
     payload = {
         "sender": {"name": FROM_NAME, "email": FROM_EMAIL},
@@ -226,8 +253,8 @@ def _send_via_brevo(
         "subject": subject,
         "htmlContent": html_content,
         "attachment": [
-            {"url": CATALOG_PDF_URL, "name": "Catalogo-Dlimit.pdf"},
-            {"url": TARIFA_PDF_URL,  "name": "Tarifa-PVP-Dlimit.pdf"},
+            {"url": catalog_url, "name": catalog_name},
+            {"url": TARIFA_PDF_URL, "name": "Tarifa-PVP-Dlimit.pdf"},
         ],
         "tags": ["info-auto", "dlimit-chatbot"],
     }
@@ -443,11 +470,20 @@ def send_info_email(
                     page_url=page_url,
                 )
             html_full = body["html_body"] + ESTER_SIGNATURE_HTML
+            # Resolver catálogo según familia detectada
+            _cat_url = _resolve_catalog_for_family(detected_family)
+            _cat_name = (
+                f"Catalogo-{detected_family.capitalize()}.pdf"
+                if detected_family and detected_family.strip().lower() in _FAMILY_CATALOG_URLS
+                else "Catalogo-Dlimit-General.pdf"
+            )
             res = _send_via_brevo(
                 to_email=client_email,
                 to_name=client_name,
                 subject=body["subject"],
                 html_content=html_full,
+                catalog_url=_cat_url,
+                catalog_name=_cat_name,
             )
             log.info("Email enviado a %s (msg_id=%s)", client_email,
                      res.get("messageId", "?"))
