@@ -32,6 +32,9 @@ from qdrant_client.models import (
 )
 from fastembed import SparseTextEmbedding
 
+# Módulo de respuesta automática con catálogo + tarifa
+from email_responder import send_info_email
+
 
 COLLECTION = "dlimit-kb"
 DENSE_VECTOR_NAME = "voyage-dense"
@@ -502,6 +505,62 @@ def api_chat():
         "tokens": {"in": resp.usage.input_tokens, "out": resp.usage.output_tokens},
         "model": CLAUDE_MODEL,
     })
+
+
+
+@app.route("/api/send-info-email", methods=["POST", "OPTIONS"])
+def api_send_info_email():
+    """
+    Endpoint que dispara el envío automático del email comercial
+    (catálogo + tarifa) al cliente que lo solicita.
+
+    Acepta dos fuentes:
+      - source="chat"        — el bot detectó intención y el cliente dejó email
+      - source="web-button"  — clic en un botón "Pedir información" de la web
+    """
+    if request.method == "OPTIONS":
+        return _cors_response()
+
+    data = request.get_json(force=True) or {}
+    client_email = (data.get("client_email") or "").strip()
+
+    if not client_email or "@" not in client_email:
+        return jsonify({"ok": False, "error": "invalid_email"}), 400
+
+    if data.get("source") == "web-button":
+        ctx = (
+            f"El cliente clicó en un botón de la web.\n"
+            f"Página: {data.get('page_url', '?')}\n"
+            f"Título: {data.get('page_title', '?')}\n"
+            f"Mensaje del cliente: {data.get('message') or '(no añadió mensaje)'}"
+        )
+    else:
+        ctx = data.get("conversation_summary", "") or data.get("message", "")
+
+    send_info_email(
+        client_email=client_email,
+        client_name=data.get("client_name"),
+        conversation_summary=ctx,
+        detected_language=data.get("language", "es"),
+        detected_family=data.get("family"),
+        detected_sector=data.get("sector"),
+        source=data.get("source", "chat"),
+        blocking=False,
+    )
+
+    response = jsonify({"ok": True, "queued": True})
+    response.headers["Access-Control-Allow-Origin"] = "*"
+    response.headers["Access-Control-Allow-Methods"] = "POST, OPTIONS"
+    response.headers["Access-Control-Allow-Headers"] = "Content-Type"
+    return response
+
+
+def _cors_response():
+    response = jsonify({"ok": True})
+    response.headers["Access-Control-Allow-Origin"] = "*"
+    response.headers["Access-Control-Allow-Methods"] = "POST, OPTIONS"
+    response.headers["Access-Control-Allow-Headers"] = "Content-Type"
+    return response
 
 
 HTML_PAGE = r"""<!doctype html>
