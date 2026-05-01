@@ -19,6 +19,7 @@ import sys
 import json
 import threading
 import re
+import time
 import urllib.request
 import urllib.error
 from datetime import datetime, timezone
@@ -36,6 +37,15 @@ from fastembed import SparseTextEmbedding
 # Módulo de respuesta automática con catálogo + tarifa
 from email_responder import send_info_email
 
+# Módulo de tracking persistente (SQLite en disco /var/data)
+from tracking import (
+    init_db as tracking_init_db,
+    log_conversation as tracking_log,
+    update_lead_info as tracking_update_lead,
+    export_csv as tracking_export_csv,
+    stats as tracking_stats,
+)
+
 
 COLLECTION = "dlimit-kb"
 DENSE_VECTOR_NAME = "voyage-dense"
@@ -50,6 +60,9 @@ BREVO_API_KEY = os.environ.get("BREVO_API_KEY", "").strip()
 LEAD_NOTIFICATION_EMAIL = os.environ.get("LEAD_NOTIFICATION_EMAIL", "info@dlimit.es").strip()
 LEAD_SENDER_EMAIL = os.environ.get("LEAD_SENDER_EMAIL", "noreply@dlimit.es").strip()
 LEAD_SENDER_NAME = "Dlimit Chatbot"
+
+# Admin key para descarga de tracking CSV / stats
+ADMIN_EXPORT_KEY = os.environ.get("ADMIN_EXPORT_KEY", "").strip()
 
 
 def required_env(name: str) -> str:
@@ -454,13 +467,28 @@ def send_lead_email(lead, question, answer):
     return False
 
 
-def process_lead_async(question, answer):
-    """Detecta lead y notifica. Thread separado para no bloquear respuesta."""
+def process_lead_async(question, answer, conv_id=None):
+    """Detecta lead y notifica. Thread separado para no bloquear respuesta.
+    Si conv_id viene informado, actualiza la fila de tracking con info del lead."""
     if not BREVO_API_KEY:
         return
     try:
         lead = detect_lead(question, answer)
-        if not lead.get("is_lead"):
+        is_lead = bool(lead.get("is_lead"))
+        # Persistir info del lead en la fila de tracking
+        if conv_id is not None:
+            try:
+                tracking_update_lead(
+                    conv_id,
+                    was_lead=is_lead,
+                    lead_email=lead.get("email") if is_lead else None,
+                    lead_urgency=lead.get("urgency") if is_lead else None,
+                    lead_sector=lead.get("sector") if is_lead else None,
+                    lead_quantity=lead.get("quantity") if is_lead else None,
+                )
+            except Exception as _e:
+                print(f"[tracking_update_lead] {_e}", flush=True)
+        if not is_lead:
             return
         print(f"[LEAD detected] {lead}", flush=True)
         if lead.get("email"):
@@ -474,6 +502,13 @@ def process_lead_async(question, answer):
 
 app = Flask(__name__)
 
+# Inicializar BBDD de tracking (crea tabla si no existe).
+# Si falla (p.ej. no hay disco), el chatbot sigue funcionando.
+try:
+    tracking_init_db()
+except Exception as _e:
+    print(f"[tracking_init_db] {_e}", flush=True)
+
 
 @app.route("/")
 def index():
@@ -482,10 +517,21 @@ def index():
 
 @app.route("/api/chat", methods=["POST"])
 def api_chat():
+    _t_start = time.time()
+    _client_ip = (
+        request.headers.get("X-Forwarded-For", request.remote_addr or "")
+        .split(",")[0]
+        .strip()
+        or None
+    )
     data = request.get_json(force=True)
     question = (data.get("question") or "").strip()
     if not question:
         return jsonify({"error": "empty"}), 400
+
+    _had_email = bool(re.search(r"[\w.+-]+@[\w-]+\.[\w.-]+", question))
+    _session_id = (data.get("session_id") or "").strip()[:80] or None
+    _lang_hint = (data.get("lang") or "").strip()[:5] or None
 
     points = hybrid_search(question)
     sources = []
@@ -508,8 +554,21 @@ def api_chat():
 
     if not points:
         answer_text = fallback_no_context(question)
+        _elapsed_ms = int((time.time() - _t_start) * 1000)
+        _conv_id = tracking_log(
+            session_id=_session_id,
+            ip=_client_ip,
+            language=_lang_hint,
+            question=question,
+            answer=answer_text,
+            sources_count=0,
+            tokens_in=0,
+            tokens_out=0,
+            response_time_ms=_elapsed_ms,
+            had_email=_had_email,
+        )
         if BREVO_API_KEY:
-            threading.Thread(target=process_lead_async, args=(question, answer_text), daemon=True).start()
+            threading.Thread(target=process_lead_async, args=(question, answer_text, _conv_id), daemon=True).start()
         return jsonify({"answer": answer_text, "sources": []})
 
     user_msg = (
@@ -564,11 +623,26 @@ def api_chat():
         # Quitar el marcador del mensaje visible al cliente
         answer_text = re.sub(r'\[SEND_INFO_EMAIL:[^\]]*\]', '', answer_text).strip()
 
+    # ─── Tracking persistente ───
+    _elapsed_ms = int((time.time() - _t_start) * 1000)
+    _conv_id = tracking_log(
+        session_id=_session_id,
+        ip=_client_ip,
+        language=_lang_hint,
+        question=question,
+        answer=answer_text,
+        sources_count=len(sources),
+        tokens_in=getattr(resp.usage, "input_tokens", 0) or 0,
+        tokens_out=getattr(resp.usage, "output_tokens", 0) or 0,
+        response_time_ms=_elapsed_ms,
+        had_email=_had_email,
+    )
+
     # Detectar lead y notificar en background (no bloquea la respuesta al cliente)
     if BREVO_API_KEY:
         threading.Thread(
             target=process_lead_async,
-            args=(question, answer_text),
+            args=(question, answer_text, _conv_id),
             daemon=True,
         ).start()
 
@@ -620,7 +694,7 @@ def api_send_info_email():
         source=data.get("source", "chat"),
         blocking=False,
         # use_ai por defecto: True para chat, False para web-button
-        # (dentro de send_info_email se decide automáticamente según source)
+        # (dentro de send_info_email se decide automaticamente segun source)
         client_message=data.get("message"),
         page_url=data.get("page_url"),
     )
@@ -638,6 +712,38 @@ def _cors_response():
     response.headers["Access-Control-Allow-Methods"] = "POST, OPTIONS"
     response.headers["Access-Control-Allow-Headers"] = "Content-Type"
     return response
+
+
+# Admin endpoints (tracking)
+@app.route("/admin/export", methods=["GET"])
+def admin_export():
+    """Descarga CSV con todas las conversaciones registradas.
+    Requiere ?key=ADMIN_EXPORT_KEY. 401 si no coincide."""
+    key = (request.args.get("key") or "").strip()
+    if not ADMIN_EXPORT_KEY or key != ADMIN_EXPORT_KEY:
+        return jsonify({"error": "unauthorized"}), 401
+    csv_str = tracking_export_csv()
+    fname = "dlimit_conversations_" + datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S") + ".csv"
+    return Response(
+        csv_str,
+        mimetype="text/csv; charset=utf-8",
+        headers={"Content-Disposition": f'attachment; filename="{fname}"'},
+    )
+
+
+@app.route("/admin/stats", methods=["GET"])
+def admin_stats_endpoint():
+    """Metricas basicas del tracking. Requiere ?key=ADMIN_EXPORT_KEY."""
+    key = (request.args.get("key") or "").strip()
+    if not ADMIN_EXPORT_KEY or key != ADMIN_EXPORT_KEY:
+        return jsonify({"error": "unauthorized"}), 401
+    return jsonify(tracking_stats())
+
+
+@app.route("/healthz", methods=["GET"])
+def healthz():
+    """Endpoint publico de salud para monitorizacion (no expone datos)."""
+    return jsonify({"status": "ok", "ts": datetime.now(timezone.utc).isoformat()})
 
 
 HTML_PAGE = r"""<!doctype html>
@@ -825,7 +931,7 @@ function autoresize(){
 
 // Historial de conversacion (se mantiene en memoria mientras la pestana este abierta)
 let conversationHistory = [];
-const MAX_HISTORY = 14;  // ultimos 14 turnos = 7 user + 7 assistant
+const MAX_HISTORY = 14;
 
 async function ask(e){
   if(e) e.preventDefault();
@@ -837,7 +943,6 @@ async function ask(e){
   send.disabled=true;
   const thinking = add('bot', '<span class="dots"><span></span><span></span><span></span></span>', 'thinking');
   try{
-    // Enviar historial de los turnos anteriores (no incluye el mensaje actual)
     const historyToSend = conversationHistory.slice(-MAX_HISTORY);
     const r = await fetch('/api/chat', {
       method:'POST',
@@ -848,10 +953,8 @@ async function ask(e){
     thinking.remove();
     const answer = data.answer || '';
     add('bot', fmt(answer));
-    // Guardar este turno en el historial
     conversationHistory.push({role: 'user', content: text});
     conversationHistory.push({role: 'assistant', content: answer});
-    // Limitar tamano del array para no acumular sin fin
     if (conversationHistory.length > MAX_HISTORY * 2) {
       conversationHistory = conversationHistory.slice(-MAX_HISTORY * 2);
     }
@@ -880,3 +983,4 @@ if __name__ == "__main__":
     print("[INFO] Iniciando servidor Dlimit Chatbot Demo...")
     print("[INFO] Abre http://localhost:5000 en tu navegador")
     app.run(host="127.0.0.1", port=5000, debug=False)
+
