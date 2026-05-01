@@ -310,6 +310,7 @@ _TEMPLATES_FIXED = {
         "intro": "Gracias por tu interés en los productos de Dlimit Tactic.",
         "family_intro": "Veo que estás interesado en la familia <strong>{family}</strong> — {description}.",
         "attachments": "Te adjunto en este email <strong>el catálogo general</strong> con todas nuestras 8 familias y <strong>la tarifa de precios PVP</strong> actualizada para que puedas valorar la solución que mejor encaja con tu proyecto.",
+        "attachments_with_family": "Te adjunto en este email <strong>el catálogo completo de la familia {family}</strong> con todas las configuraciones disponibles y <strong>la tarifa de precios PVP</strong> actualizada para que puedas valorar la solución que mejor encaja con tu proyecto.",
         "volume_note": "Para <strong>volúmenes especiales</strong>, configuraciones particulares o personalización con tu logotipo, ajustamos condiciones caso por caso.",
         "callback": "<strong>Ester Prieto</strong>, nuestra responsable comercial, te llamará en las <strong>próximas 24 horas laborables</strong> al teléfono que nos facilites para resolver dudas y ajustar el presupuesto. Si lo prefieres, puedes contactar directamente al <a href=\"tel:+34932526915\" style=\"color:#2A9D2A\">932 526 915</a>.",
         "closing": "Quedamos a tu disposición.",
@@ -323,6 +324,7 @@ _TEMPLATES_FIXED = {
         "intro": "Thank you for your interest in Dlimit Tactic products.",
         "family_intro": "I see you are interested in our <strong>{family}</strong> family — {description}.",
         "attachments": "Attached you will find <strong>our general catalog</strong> with all 8 product families and <strong>our up-to-date PVP price list</strong> so you can evaluate the solution that best fits your project.",
+        "attachments_with_family": "Attached you will find <strong>the full {family} family catalog</strong> with all available configurations and <strong>our up-to-date PVP price list</strong> so you can evaluate the solution that best fits your project.",
         "volume_note": "For <strong>special volumes</strong>, custom configurations or personalisation with your logo, we adjust conditions case by case.",
         "callback": "<strong>Ester Prieto</strong>, our sales manager, will call you within the <strong>next 24 working hours</strong> on the phone you provide to clarify any questions and prepare a tailored quote. You can also reach us directly at <a href=\"tel:+34932526915\" style=\"color:#2A9D2A\">+34 932 526 915</a>.",
         "closing": "Looking forward to helping you.",
@@ -336,6 +338,7 @@ _TEMPLATES_FIXED = {
         "intro": "Merci pour votre intérêt pour les produits Dlimit Tactic.",
         "family_intro": "Je vois que vous êtes intéressé(e) par la famille <strong>{family}</strong> — {description}.",
         "attachments": "Vous trouverez en pièce jointe <strong>notre catalogue général</strong> avec nos 8 familles de produits et <strong>notre tarif PVP à jour</strong> pour évaluer la solution qui correspond le mieux à votre projet.",
+        "attachments_with_family": "Vous trouverez en pièce jointe <strong>le catalogue complet de la famille {family}</strong> avec toutes les configurations disponibles et <strong>notre tarif PVP à jour</strong> pour évaluer la solution qui correspond le mieux à votre projet.",
         "volume_note": "Pour <strong>les volumes importants</strong>, configurations particulières ou personnalisation avec votre logo, nous adaptons les conditions au cas par cas.",
         "callback": "<strong>Ester Prieto</strong>, notre responsable commerciale, vous contactera dans les <strong>24 heures ouvrées</strong> au numéro que vous nous indiquerez pour répondre à vos questions et préparer un devis sur mesure. Vous pouvez aussi nous joindre directement au <a href=\"tel:+34932526915\" style=\"color:#2A9D2A\">+34 932 526 915</a>.",
         "closing": "Au plaisir de vous aider.",
@@ -382,7 +385,11 @@ def _render_fixed_template(
         desc = _FAMILY_DESCRIPTIONS[fam].get(lang, _FAMILY_DESCRIPTIONS[fam]["es"])
         parts.append(f"<p>{t['family_intro'].format(family=family_pretty, description=desc)}</p>")
 
-    parts.append(f"<p>{t['attachments']}</p>")
+    # Frase de adjuntos: si hay familia detectada en el catálogo, mencionarlo
+    if family_pretty and fam in _FAMILY_CATALOG_URLS and "attachments_with_family" in t:
+        parts.append(f"<p>{t['attachments_with_family'].format(family=family_pretty)}</p>")
+    else:
+        parts.append(f"<p>{t['attachments']}</p>")
     parts.append(f"<p>{t['volume_note']}</p>")
     parts.append(f"<p>{t['callback']}</p>")
     parts.append(f"<p>{t['closing']}</p>")
