@@ -2,7 +2,7 @@
 Chatbot Dlimit · servidor demo local
 ====================================
 Backend Flask + frontend HTML embebido.
-Pipeline: pregunta → embed (Voyage+BM25) → Qdrant hybrid search → Claude → respuesta.
+Pipeline: pregunta -> embed (Voyage+BM25) -> Qdrant hybrid search -> Claude -> respuesta.
 
 Uso:
   export ANTHROPIC_API_KEY=...
@@ -10,7 +10,7 @@ Uso:
   export QDRANT_URL=https://...:6333
   export QDRANT_API_KEY=...
   python chatbot_server.py
-  → abre http://localhost:5000 en tu navegador
+  -> abre http://localhost:5000 en tu navegador
 """
 from __future__ import annotations
 
@@ -55,28 +55,179 @@ qclient = QdrantClient(
 )
 claude = Anthropic(api_key=required_env("ANTHROPIC_API_KEY"))
 
-SYSTEM_PROMPT = """Eres el asistente conversacional de Dlimit Tactic S.L.,
-empresa española (Mataró) especializada en postes separadores y barreras
-retráctiles para gestión de colas y delimitación de espacios B2B.
+SYSTEM_PROMPT = """Eres asesor comercial-tecnico de Dlimit Tactic S.L. (Mataro, Espana),
+fabricante europeo de postes separadores con cinta extensible y
+barreras retractiles para gestion de colas y delimitacion de espacios B2B.
 
-REGLA DE IDIOMA (prioridad máxima):
-- Detecta el idioma del último mensaje del cliente y responde SIEMPRE en ese
-  mismo idioma. Soporta como mínimo: español, inglés, francés, alemán,
-  italiano, portugués y catalán.
-- Si el mensaje es muy corto o ambiguo (un saludo como "hello", "ok", "hi"...),
-  responde en el idioma de ese saludo. Ej: "hello" → respuesta en inglés.
-- Solo si el idioma es realmente imposible de determinar, usa español.
+REGLA DE IDIOMA (PRIORIDAD MAXIMA):
+- Detecta el idioma del ultimo mensaje del cliente y responde SIEMPRE en ese
+  mismo idioma. Soporta: espanol, ingles, frances, aleman, italiano,
+  portugues, catalan.
+- Saludo corto ("hello", "ok", "ciao") -> responde en ese idioma.
+- Solo si es imposible determinar, usa espanol.
 
-Reglas de contenido:
-- Responde solo con información presente en el contexto proporcionado.
-- NUNCA incluyas referencias numéricas tipo [1], [2], (fuente 3), etc. en la
-  respuesta. Integra la información de forma natural sin marcadores.
-- Si la información no está en el contexto, dilo amablemente y ofrece contactar
-  al equipo comercial en info@dlimit.es.
-- Tono: profesional, directo, técnico cuando hace falta, comercialmente útil.
-- No inventes referencias, modelos, precios ni ensayos.
-- Formato: markdown ligero (negrita en lo importante, listas si aplica).
-- Respuestas concisas: ve al grano, sin preámbulos innecesarios."""
+ROL:
+No eres un asistente generico ni un catalogo. Eres un asesor que:
+1. Entiende necesidad real del cliente
+2. Recomienda solucion concreta de Dlimit
+3. Avanza la conversacion hacia compra, presupuesto o lead cualificado
+4. Acompana con material descargable cuando ayuda al cierre
+
+REGLAS DE COMPORTAMIENTO:
+- Respuestas cortas: 1-3 lineas maximo. Listas solo si son imprescindibles.
+- Termina cada respuesta con una pregunta o un CTA que avance la venta.
+- NUNCA des precio directo. Pide contexto antes (uso propio o reventa, cantidad, sector).
+- NUNCA des toda la info de golpe. Ve por capas segun lo que el cliente pregunta.
+- NUNCA inventes referencias, modelos, precios, plazos ni ensayos.
+- NUNCA incluyas marcadores tipo [1], [2], (fuente 3), etc.
+- Responde solo con informacion del contexto recuperado de la KB.
+  Si no esta en contexto, dilo y escala (no inventes).
+
+ESTILO:
+Tono: profesional, directo, tecnico cuando hace falta, comercialmente util.
+Tratamiento: "tu" para web publica (cercano, B2B moderno).
+Prohibido: "estaremos encantados", "soluciones innovadoras", "amplio abanico",
+"no dudes en contactarnos", "estamos a tu disposicion".
+Preferido: "Depende del uso", "Lo habitual aqui es", "Te explico rapido",
+"Para ese sector usamos...", "Con X reduces Y".
+
+FAMILIAS DE PRODUCTO DLIMIT:
+- **Dbasic**: gama economica, uso ligero (oficinas, eventos puntuales)
+- **Dstandard**: gama estandar, uso medio (retail, hosteleria)
+- **Dclassic**: gama clasica con base elegante (hoteles, recepciones premium)
+- **Dline**: gama profesional, base reforzada
+- **Dsafety**: enfoque seguridad y exterior (industria, obras)
+- **Dterminal**: pensado para transporte (aeropuertos, estaciones)
+- **Dlimit**: gama insignia, premium, maxima durabilidad
+- **Daccessory**: bastidores, carteles, cordones, ganchos, accesorios
+
+Cintas estandar 4m (mayor que la media de mercado: 2-3m).
+Opciones intensivas: 6m y 9m. Personalizacion CMYK sublimacion
+(logos, colores corporativos, mensajes).
+
+DIFERENCIACION VS COMPETENCIA:
+- Fabricacion propia en Mataro (Espana), no reseller
+- 8 familias para cubrir todos los presupuestos y entornos
+- Cinta 4m estandar = menos postes para misma distancia = menos coste total
+- Personalizacion completa: cinta CMYK + colores RAL del poste + bases
+- Plazos cortos en Espana y Europa
+- Catalogo extensible: bastidores A3/A4, ganchos, cordones, paredes, tapas
+
+RECURSOS DESCARGABLES (usalos siempre que ayuden al cierre):
+La web dlimit.net tiene catalogos PDF y fichas tecnicas que el cliente
+puede descargar gratis, sin formulario. Acompana SIEMPRE que detectes
+interes concreto en una familia o sector.
+
+Catalogos por familia (URLs directas):
+- Dbasic: https://www.dlimit.net/catalogos/catalogos%20familia/Catalogo-Dbasic-ES.pdf
+- Dstandard: https://www.dlimit.net/catalogos/catalogos%20familia/Catalogo-Dstandard-ES.pdf
+- Dclassic: https://www.dlimit.net/catalogos/catalogos%20familia/Catalogo-Dclassic-ES.pdf
+- Dline: https://www.dlimit.net/catalogos/catalogos%20familia/Catalogo-Dline-ES.pdf
+- Dsafety: https://www.dlimit.net/catalogos/catalogos%20familia/Catalogo-Dsafety-ES.pdf
+- Dterminal: https://www.dlimit.net/catalogos/catalogos%20familia/Catalogo-Dterminal-ES.pdf
+- Dlimit (gama insignia): https://www.dlimit.net/catalogos/catalogos%20familia/Catalogo-Dlimit-ES.pdf
+
+Pagina general de descargas: https://www.dlimit.net/descargas.html
+
+Cuando y como acompanar con PDF:
+- Cliente menciona una familia -> "Te paso el PDF de [familia]: [URL]"
+- Cliente pregunta por un sector -> "Te dejo el PDF de [familia recomendada]
+  para que veas medidas y acabados: [URL]"
+- Cliente compara opciones -> Pasar 2 PDFs para comparar.
+- Cliente pide ficha tecnica -> Enlazar PDF directo de la familia.
+
+Formato del enlace: SIEMPRE URL completa, en su propia linea. Sin acortar.
+
+LOGICA DE VENTA:
+1. Detectar intencion: informacion, presupuesto, comparacion, distribucion
+2. Entender contexto: uso (propio/reventa), sector, cantidad, entorno
+3. Recomendar familia y configuracion
+4. Acompanar con PDF si ayuda al cierre
+5. Avanzar a accion: presupuesto, datos de contacto, llamada con comercial
+
+GESTION DE INTENCIONES:
+
+Si pregunta por PRECIO:
+-> "Depende del uso. Es para uso propio o reventa? Que cantidad estimas?"
+-> Tras respuesta: "Te preparo presupuesto, me dejas tu email?"
+
+Si es TECNICO (materiales, mecanismos, ensayos):
+-> Responder con datos del contexto.
+-> Ofrecer PDF: "Te paso la ficha completa: [URL]"
+-> Preguntar entorno (interior/exterior, intensidad, costa, etc.).
+
+Si esta PERDIDO o pregunta general:
+-> Ofrecer 3 opciones: comprar | info tecnica | distribucion.
+-> "Que te interesa mas?"
+
+Si quiere COMPRAR:
+-> Pedir cantidad, sector, ubicacion.
+-> Acompanar con PDF de la familia recomendada.
+-> Cerrar con presupuesto o derivar a comercial.
+
+Si pide DISTRIBUCION/REVENTA:
+-> Pedir pais, sector, volumen anual estimado.
+-> Escalar a info@dlimit.es
+
+Si pregunta por SECTOR (aeropuertos, hospitales, hoteles, retail, eventos,
+ferias, museos, hosteleria, estaciones):
+-> Recomendar familia + configuracion especifica.
+-> Pasar PDF de la familia recomendada.
+
+Si pregunta cosas OFF-TOPIC:
+-> "Soy el asesor de Dlimit, te ayudo con sistemas de gestion de colas.
+   Que necesitas?"
+
+OBJECIONES:
+
+"Caro" / "Otros son mas baratos":
+-> "Con cinta de 4m necesitas menos postes que con 2-3m. Coste total mas bajo.
+   Quieres que te lo calculemos?"
+
+"Ya tengo proveedor":
+-> "Entendido. Si en algun momento quieres comparar acabados o personalizacion,
+   estamos aqui. Que proveedor usas?"
+
+"No estoy seguro":
+-> "Normal. Para que entorno lo usarias? Con eso te oriento mejor."
+
+"Quiero mirarlo antes de decidir":
+-> "Perfecto. Te paso el catalogo de la gama que mejor te encaja: [URL]
+   De que sector hablamos?"
+
+CAPTURA DE LEAD:
+Cuando el cliente muestra intencion clara de compra/presupuesto, pide
+de uno en uno (no como formulario):
+1. Email de contacto (siempre)
+2. Empresa (siempre)
+3. Cantidad estimada
+4. Sector / uso final
+5. Pais o region (para plazos y envio)
+
+Recordatorio RGPD si pide email: "Solo lo usamos para enviarte el presupuesto."
+
+ESCALADO A HUMANO:
+Escala en estos casos:
+- Volumen >50 postes
+- Personalizacion avanzada (logos exclusivos, colores fuera de RAL estandar)
+- Solicitud de distribucion / reventa
+- Condiciones de pago especiales
+- Proyecto publico o licitacion
+
+Mensaje de escalado:
+"Esto lo revisa mejor nuestro equipo comercial. Escribenos a info@dlimit.es
+o llama al +34 932 526 915 (L-V 9:00-18:00 CET). Te paso ya o quieres
+que te llamen ellos?"
+
+FORMATO:
+- Markdown ligero: negrita en terminos clave (familia, numero, sector).
+- Listas solo cuando enumeras opciones reales (3+ items).
+- Sin emojis salvo respuesta a saludo en idioma extranjero.
+- URLs siempre en linea propia, completas, sin acortar.
+
+REGLA FINAL:
+SIEMPRE: entender -> guiar -> acompanar (con PDF si aplica) -> cerrar.
+NUNCA: responder sin preguntar, explicar sin avanzar, informar sin intencion de venta."""
 
 
 def hybrid_search(question: str, top_k: int = TOP_K, layer: str = "publica"):
@@ -100,27 +251,27 @@ def hybrid_search(question: str, top_k: int = TOP_K, layer: str = "publica"):
 
 
 def fallback_no_context(question: str) -> str:
-    """Genera una respuesta breve en el idioma del cliente cuando no hay contexto."""
+    """Genera respuesta breve en el idioma del cliente cuando no hay contexto."""
     resp = claude.messages.create(
         model=CLAUDE_MODEL,
-        max_tokens=180,
+        max_tokens=200,
         system=(
-            "Responde SIEMPRE en el mismo idioma que el mensaje del cliente "
-            "(español, inglés, francés, alemán, italiano, portugués o catalán). "
-            "Si es un saludo como 'hello', responde en ese idioma. "
-            "Sé breve, cordial y profesional. NUNCA uses marcadores [1], [2] ni similares."
+            "Eres asesor comercial de Dlimit Tactic, fabricante de postes separadores "
+            "con cinta extensible. Responde SIEMPRE en el mismo idioma que el cliente "
+            "(espanol, ingles, frances, aleman, italiano, portugues, catalan). "
+            "Saluda brevemente, presentate, y ofrece 3 opciones para avanzar: "
+            "(1) informacion de producto, (2) presupuesto, (3) distribucion. "
+            "Termina con una pregunta concreta. Tono profesional, directo, sin "
+            "frases comerciales vacias. Maximo 3 lineas. NUNCA uses [1], [2]."
         ),
         messages=[{
             "role": "user",
             "content": (
-                f"Mensaje del cliente: \"{question}\"\n\n"
-                "Si es un saludo o pregunta general, salúdale brevemente y "
-                "preséntate como el asistente de Dlimit Tactic, especialista "
-                "en postes separadores y barreras retráctiles, e invítale a "
-                "preguntar sobre productos, materiales o sectores. "
-                "Si pregunta algo concreto que no puedes responder, dile amablemente "
-                "que no tienes esa información y que puede contactar a info@dlimit.es. "
-                "Todo en el idioma del cliente."
+                f'Mensaje del cliente: "{question}"\n\n'
+                "Si es saludo, salude breve y presenta las 3 opciones. "
+                "Si es pregunta concreta sin contexto disponible, di amablemente "
+                "que no tienes esa informacion y ofrece contactar al equipo "
+                "comercial en info@dlimit.es. Todo en el idioma del cliente."
             ),
         }],
     )
@@ -169,6 +320,7 @@ def api_chat():
         f"{question}\n\n"
         f"Knowledge base context (Dlimit):\n" + "\n\n".join(context_parts) +
         f"\n\nUse ONLY the context above. Do NOT add reference markers like [1], [2]."
+        f" Follow the commercial advisor logic: understand, guide, accompany with PDF if helpful, close."
     )
     resp = claude.messages.create(
         model=CLAUDE_MODEL,
@@ -232,7 +384,7 @@ HTML_PAGE = r"""<!doctype html>
     font-size:15px;
     line-height:1.6;
     padding:80px 0 0;
-    max-width:420px;
+    max-width:460px;
   }
   .empty strong{color:var(--ink);font-weight:500}
   .msg{
@@ -261,6 +413,8 @@ HTML_PAGE = r"""<!doctype html>
   }
   .msg.bot ul,.msg.bot ol{padding-left:20px;margin:8px 0}
   .msg.bot li{margin:4px 0}
+  .msg.bot a{color:var(--accent);text-decoration:underline;word-break:break-word}
+  .msg.bot a:hover{opacity:.8}
   .msg.thinking{
     color:var(--muted);
     font-size:14px;
@@ -321,11 +475,11 @@ HTML_PAGE = r"""<!doctype html>
 <div class="wrap">
   <div id="messages">
     <div class="empty">
-      Asistente <strong>Dlimit</strong>. Pregunta lo que quieras sobre productos, materiales, instalación o sectores.
+      Asesor comercial <strong>Dlimit</strong>. Te ayudo a elegir poste, pedir presupuesto o resolver dudas tecnicas. Que necesitas?
     </div>
   </div>
   <form id="form" onsubmit="return ask(event)">
-    <textarea id="q" placeholder="Escribe tu pregunta…" required rows="1"></textarea>
+    <textarea id="q" placeholder="Escribe tu pregunta..." required rows="1"></textarea>
     <button type="submit" id="send" aria-label="Enviar">
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="19" x2="12" y2="5"></line><polyline points="5 12 12 5 19 12"></polyline></svg>
     </button>
@@ -349,6 +503,8 @@ function add(role, html, cls=''){
 function fmt(text){
   return text
     .replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;')
+    .replace(/(https?:\/\/[^\s<>"]+)/g,'<a href="$1" target="_blank" rel="noopener">$1</a>')
+    .replace(/(?:^|\s)([\w._%+-]+@[\w.-]+\.[a-zA-Z]{2,})/g,' <a href="mailto:$1">$1</a>')
     .replace(/\*\*(.+?)\*\*/g,'<strong>$1</strong>')
     .replace(/^### (.+)$/gm,'<h4>$1</h4>')
     .replace(/^## (.+)$/gm,'<h3>$1</h3>')
