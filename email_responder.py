@@ -243,6 +243,144 @@ def _send_via_brevo(
     return r.json()
 
 
+
+# ───────────────── Templates fijos (sin IA) para botones web ─────────────────
+# Estos templates se usan cuando source="web-button". Más rápidos y baratos
+# que llamar a Claude — solo dependen del idioma y opcionalmente de la familia.
+
+_FAMILY_DESCRIPTIONS = {
+    "dbasic":     {"es": "gama económica, ideal para uso ligero (oficinas, eventos puntuales)",
+                   "en": "value range, ideal for light use (offices, occasional events)",
+                   "fr": "gamme économique, idéale pour un usage léger (bureaux, événements ponctuels)"},
+    "dstandard":  {"es": "gama estándar, equilibrio precio-calidad para uso medio (retail, hostelería)",
+                   "en": "standard range, balanced price-quality for medium use (retail, hospitality)",
+                   "fr": "gamme standard, équilibre prix-qualité pour usage moyen (retail, hôtellerie)"},
+    "dclassic":   {"es": "gama clásica con base elegante, perfecta para hoteles y recepciones premium",
+                   "en": "classic range with elegant base, perfect for hotels and premium receptions",
+                   "fr": "gamme classique avec base élégante, parfaite pour hôtels et réceptions premium"},
+    "dline":      {"es": "gama profesional con base reforzada para uso intensivo",
+                   "en": "professional range with reinforced base for intensive use",
+                   "fr": "gamme professionnelle avec base renforcée pour usage intensif"},
+    "dsafety":    {"es": "enfocada a seguridad y exterior (industria, obras, fábricas)",
+                   "en": "focused on safety and outdoor use (industry, construction, factories)",
+                   "fr": "orientée sécurité et extérieur (industrie, chantiers, usines)"},
+    "dterminal":  {"es": "diseñada para transporte (aeropuertos, estaciones, terminales)",
+                   "en": "designed for transport (airports, stations, terminals)",
+                   "fr": "conçue pour le transport (aéroports, gares, terminaux)"},
+    "dlimit":     {"es": "gama insignia premium, máxima durabilidad y acabados de alta gama",
+                   "en": "premium flagship range, maximum durability and high-end finishes",
+                   "fr": "gamme phare premium, durabilité maximale et finitions haut de gamme"},
+    "daccessory": {"es": "accesorios complementarios (bastidores, carteles, ganchos, cordones)",
+                   "en": "complementary accessories (stands, signs, hooks, ropes)",
+                   "fr": "accessoires complémentaires (chevalets, panneaux, crochets, cordons)"},
+}
+
+_TEMPLATES_FIXED = {
+    "es": {
+        "subject": "Información Dlimit Tactic — catálogo y tarifa",
+        "subject_with_family": "Información Dlimit {family} — catálogo y tarifa",
+        "greeting": "Hola{name_part},",
+        "intro": "Gracias por tu interés en los productos de Dlimit Tactic.",
+        "family_intro": "Veo que estás interesado en la familia <strong>{family}</strong> — {description}.",
+        "attachments": "Te adjunto en este email <strong>el catálogo general</strong> con todas nuestras 8 familias y <strong>la tarifa de precios PVP</strong> actualizada para que puedas valorar la solución que mejor encaja con tu proyecto.",
+        "volume_note": "Para <strong>volúmenes especiales</strong>, configuraciones particulares o personalización con tu logotipo, ajustamos condiciones caso por caso.",
+        "callback": "<strong>Ester Prieto</strong>, nuestra responsable comercial, te llamará en las <strong>próximas 24 horas laborables</strong> al teléfono que nos facilites para resolver dudas y ajustar el presupuesto. Si lo prefieres, puedes contactar directamente al <a href=\"tel:+34932526915\" style=\"color:#2A9D2A\">932 526 915</a>.",
+        "closing": "Quedamos a tu disposición.",
+        "client_message_label": "Tu mensaje",
+        "page_label": "Página de referencia",
+    },
+    "en": {
+        "subject": "Dlimit Tactic information — catalog and price list",
+        "subject_with_family": "Dlimit {family} information — catalog and price list",
+        "greeting": "Hello{name_part},",
+        "intro": "Thank you for your interest in Dlimit Tactic products.",
+        "family_intro": "I see you are interested in our <strong>{family}</strong> family — {description}.",
+        "attachments": "Attached you will find <strong>our general catalog</strong> with all 8 product families and <strong>our up-to-date PVP price list</strong> so you can evaluate the solution that best fits your project.",
+        "volume_note": "For <strong>special volumes</strong>, custom configurations or personalisation with your logo, we adjust conditions case by case.",
+        "callback": "<strong>Ester Prieto</strong>, our sales manager, will call you within the <strong>next 24 working hours</strong> on the phone you provide to clarify any questions and prepare a tailored quote. You can also reach us directly at <a href=\"tel:+34932526915\" style=\"color:#2A9D2A\">+34 932 526 915</a>.",
+        "closing": "Looking forward to helping you.",
+        "client_message_label": "Your message",
+        "page_label": "Reference page",
+    },
+    "fr": {
+        "subject": "Information Dlimit Tactic — catalogue et tarif",
+        "subject_with_family": "Information Dlimit {family} — catalogue et tarif",
+        "greeting": "Bonjour{name_part},",
+        "intro": "Merci pour votre intérêt pour les produits Dlimit Tactic.",
+        "family_intro": "Je vois que vous êtes intéressé(e) par la famille <strong>{family}</strong> — {description}.",
+        "attachments": "Vous trouverez en pièce jointe <strong>notre catalogue général</strong> avec nos 8 familles de produits et <strong>notre tarif PVP à jour</strong> pour évaluer la solution qui correspond le mieux à votre projet.",
+        "volume_note": "Pour <strong>les volumes importants</strong>, configurations particulières ou personnalisation avec votre logo, nous adaptons les conditions au cas par cas.",
+        "callback": "<strong>Ester Prieto</strong>, notre responsable commerciale, vous contactera dans les <strong>24 heures ouvrées</strong> au numéro que vous nous indiquerez pour répondre à vos questions et préparer un devis sur mesure. Vous pouvez aussi nous joindre directement au <a href=\"tel:+34932526915\" style=\"color:#2A9D2A\">+34 932 526 915</a>.",
+        "closing": "Au plaisir de vous aider.",
+        "client_message_label": "Votre message",
+        "page_label": "Page de référence",
+    },
+}
+
+def _render_fixed_template(
+    *,
+    language: str,
+    family: Optional[str],
+    client_name: Optional[str],
+    client_message: Optional[str],
+    page_url: Optional[str],
+) -> dict:
+    """Genera subject + html_body desde templates fijos (sin llamada a Claude)."""
+    lang = (language or "es").lower()[:2]
+    if lang not in _TEMPLATES_FIXED:
+        lang = "es"  # fallback
+    t = _TEMPLATES_FIXED[lang]
+
+    fam = (family or "").lower().strip()
+    family_pretty = fam.capitalize() if fam else None
+
+    # Subject (con familia si la hay)
+    if family_pretty:
+        subject = t["subject_with_family"].format(family=family_pretty)
+    else:
+        subject = t["subject"]
+
+    # Greeting con nombre si lo dio
+    name_part = ""
+    if client_name and client_name.strip():
+        first_name = client_name.strip().split()[0][:30]
+        name_part = " " + first_name
+    greeting = t["greeting"].format(name_part=name_part)
+
+    # Cuerpo principal
+    parts = [f"<p>{greeting}</p>"]
+    parts.append(f"<p>{t['intro']}</p>")
+
+    if fam in _FAMILY_DESCRIPTIONS:
+        desc = _FAMILY_DESCRIPTIONS[fam].get(lang, _FAMILY_DESCRIPTIONS[fam]["es"])
+        parts.append(f"<p>{t['family_intro'].format(family=family_pretty, description=desc)}</p>")
+
+    parts.append(f"<p>{t['attachments']}</p>")
+    parts.append(f"<p>{t['volume_note']}</p>")
+    parts.append(f"<p>{t['callback']}</p>")
+    parts.append(f"<p>{t['closing']}</p>")
+
+    # Si el cliente añadió mensaje, lo mostramos al final como referencia
+    if client_message and client_message.strip():
+        msg_safe = client_message.strip()[:500]
+        # Escape básico de HTML
+        msg_safe = msg_safe.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+        parts.append(
+            f'<p style="background:#f5f7f5;padding:10px;border-left:3px solid #2A9D2A;'
+            f'font-size:13px;color:#444;margin-top:14px"><strong>{t["client_message_label"]}:</strong> '
+            f'<em>"{msg_safe}"</em></p>'
+        )
+
+    # Página visitada (útil para Ester cuando llame)
+    if page_url and page_url.startswith(("http://", "https://")):
+        parts.append(
+            f'<p style="font-size:11px;color:#999;margin-top:16px">'
+            f'{t["page_label"]}: <a href="{page_url}" style="color:#999">{page_url}</a></p>'
+        )
+
+    return {"subject": subject, "html_body": "\n".join(parts)}
+
+
 # ───────────────── API pública del módulo ─────────────────
 
 def send_info_email(
@@ -255,6 +393,9 @@ def send_info_email(
     detected_sector: Optional[str] = None,
     source: str = "chat",
     blocking: bool = False,
+    use_ai: Optional[bool] = None,
+    client_message: Optional[str] = None,
+    page_url: Optional[str] = None,
 ) -> dict:
     """
     Punto de entrada principal del módulo.
@@ -280,15 +421,27 @@ def send_info_email(
     if not client_email or "@" not in client_email:
         return {"ok": False, "error": "invalid_email"}
 
+    # Si no se especifica use_ai, decidir por defecto: chat usa IA, web-button no
+    _use_ai = use_ai if use_ai is not None else (source != "web-button")
+
     def _run():
         try:
-            body = _generate_body(
-                language=detected_language,
-                source=source,
-                family=detected_family,
-                sector=detected_sector,
-                context_summary=conversation_summary,
-            )
+            if _use_ai:
+                body = _generate_body(
+                    language=detected_language,
+                    source=source,
+                    family=detected_family,
+                    sector=detected_sector,
+                    context_summary=conversation_summary,
+                )
+            else:
+                body = _render_fixed_template(
+                    language=detected_language,
+                    family=detected_family,
+                    client_name=client_name,
+                    client_message=client_message,
+                    page_url=page_url,
+                )
             html_full = body["html_body"] + ESTER_SIGNATURE_HTML
             res = _send_via_brevo(
                 to_email=client_email,

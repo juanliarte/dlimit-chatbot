@@ -619,6 +619,10 @@ def api_send_info_email():
         detected_sector=data.get("sector"),
         source=data.get("source", "chat"),
         blocking=False,
+        # use_ai por defecto: True para chat, False para web-button
+        # (dentro de send_info_email se decide automáticamente según source)
+        client_message=data.get("message"),
+        page_url=data.get("page_url"),
     )
 
     response = jsonify({"ok": True, "queued": True})
