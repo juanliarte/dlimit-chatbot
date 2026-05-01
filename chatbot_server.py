@@ -17,6 +17,10 @@ from __future__ import annotations
 import os
 import sys
 import json
+import threading
+import urllib.request
+import urllib.error
+from datetime import datetime, timezone
 
 from flask import Flask, request, jsonify, Response
 import voyageai
@@ -36,6 +40,12 @@ DENSE_MODEL = "voyage-3-large"
 SPARSE_MODEL = "Qdrant/bm25"
 CLAUDE_MODEL = "claude-haiku-4-5"
 TOP_K = 6
+
+# Brevo lead capture (opcional - si no hay key, se desactiva sin romper)
+BREVO_API_KEY = os.environ.get("BREVO_API_KEY", "").strip()
+LEAD_NOTIFICATION_EMAIL = os.environ.get("LEAD_NOTIFICATION_EMAIL", "info@dlimit.es").strip()
+LEAD_SENDER_EMAIL = os.environ.get("LEAD_SENDER_EMAIL", "noreply@dlimit.es").strip()
+LEAD_SENDER_NAME = "Dlimit Chatbot"
 
 
 def required_env(name: str) -> str:
@@ -278,6 +288,151 @@ def fallback_no_context(question: str) -> str:
     return resp.content[0].text
 
 
+
+# ============================================================
+# CAPTURA DE LEADS - INTEGRACION BREVO
+# ============================================================
+
+def detect_lead(question, answer):
+    """Clasifica si la conversacion es un lead. Llama a Claude Haiku."""
+    try:
+        prompt = (
+            f"Analiza esta interaccion del chatbot comercial de Dlimit (postes separadores B2B):\n\n"
+            f"CLIENTE: {question}\n"
+            f"BOT: {answer}\n\n"
+            f"Devuelve SOLO un JSON valido (sin markdown) con estos campos:\n"
+            f'{{"is_lead": true|false, "email": "..."|null, "sector": "..."|null, '
+            f'"quantity": "..."|null, "country": "..."|null, "urgency": "low"|"medium"|"high", '
+            f'"summary": "...", "language": "es"|"en"|"fr"|"de"|"it"|"pt"|"ca"}}\n\n'
+            f"Reglas:\n"
+            f"- is_lead=true SOLO si el cliente muestra intencion clara de compra/presupuesto/distribucion\n"
+            f"  (mencionar cantidad, sector, ubicacion, dejar email, pedir presupuesto explicito)\n"
+            f"- Saludos, preguntas generales o tecnicas sin contexto comercial -> is_lead=false\n"
+            f"- email: extraer email del cliente si lo escribio (regex valido), si no null\n"
+            f"- urgency=high si menciona plazos cortos, evento proximo, urgencia explicita\n"
+            f"- summary: 1-2 lineas en espanol describiendo el interes del cliente\n"
+        )
+        resp = claude.messages.create(
+            model=CLAUDE_MODEL,
+            max_tokens=300,
+            messages=[{"role": "user", "content": prompt}],
+        )
+        text = resp.content[0].text.strip()
+        if text.startswith("```"):
+            text = text.split("```")[1]
+            if text.startswith("json"):
+                text = text[4:]
+        return json.loads(text.strip())
+    except Exception as e:
+        print(f"[detect_lead] error: {e}", flush=True)
+        return {"is_lead": False}
+
+
+def brevo_request(method, path, body=None):
+    """Llama a la API de Brevo. Devuelve (status_code, body)."""
+    url = f"https://api.brevo.com/v3{path}"
+    data = json.dumps(body).encode("utf-8") if body else None
+    req = urllib.request.Request(
+        url, data=data, method=method,
+        headers={
+            "api-key": BREVO_API_KEY,
+            "accept": "application/json",
+            "content-type": "application/json",
+        },
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=10) as r:
+            raw = r.read().decode("utf-8")
+            return r.status, (json.loads(raw) if raw else {})
+    except urllib.error.HTTPError as e:
+        return e.code, e.read().decode("utf-8", errors="ignore")
+    except Exception as e:
+        return 0, str(e)
+
+
+def upsert_brevo_contact(lead):
+    """Crea o actualiza Contact en Brevo CRM."""
+    if not lead.get("email"):
+        return None
+    body = {
+        "email": lead["email"],
+        "attributes": {
+            "SECTOR_DLIMIT": lead.get("sector") or "",
+            "QUANTITY_ESTIMATE": lead.get("quantity") or "",
+            "COUNTRY_DLIMIT": lead.get("country") or "",
+            "URGENCY": lead.get("urgency") or "",
+            "LANGUAGE": lead.get("language") or "",
+            "LAST_INTERACTION_SUMMARY": lead.get("summary") or "",
+            "SOURCE": "chatbot-dlimit-net",
+        },
+        "listIds": [],
+        "updateEnabled": True,
+    }
+    status, resp = brevo_request("POST", "/contacts", body)
+    if status in (200, 201, 204):
+        return resp.get("id") if isinstance(resp, dict) else -1
+    print(f"[brevo_contact] error {status}: {resp}", flush=True)
+    return None
+
+
+def send_lead_email(lead, question, answer):
+    """Envia email transaccional al equipo comercial."""
+    timestamp = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
+    urgency_color = {"high": "#D32F2F", "medium": "#F57C00", "low": "#666666"}.get(
+        lead.get("urgency", "low"), "#666666"
+    )
+    answer_html = answer.replace(chr(10), "<br/>")
+    html = (
+        '<html><body style="font-family: Arial, sans-serif; color: #111; max-width: 640px;">'
+        '<h2 style="color: #2A9D2A; margin-bottom: 4px;">Nuevo lead chatbot Dlimit</h2>'
+        f'<p style="color: #888; font-size: 12px; margin-top: 0;">{timestamp}</p>'
+        '<table style="border-collapse: collapse; margin: 16px 0; width: 100%;">'
+        f'<tr><td style="padding:6px 12px;background:#f5f5f5;font-weight:bold;">Email</td><td style="padding:6px 12px;"><a href="mailto:{lead.get("email","")}">{lead.get("email","(no facilitado)")}</a></td></tr>'
+        f'<tr><td style="padding:6px 12px;background:#f5f5f5;font-weight:bold;">Sector</td><td style="padding:6px 12px;">{lead.get("sector") or "-"}</td></tr>'
+        f'<tr><td style="padding:6px 12px;background:#f5f5f5;font-weight:bold;">Cantidad</td><td style="padding:6px 12px;">{lead.get("quantity") or "-"}</td></tr>'
+        f'<tr><td style="padding:6px 12px;background:#f5f5f5;font-weight:bold;">Pais</td><td style="padding:6px 12px;">{lead.get("country") or "-"}</td></tr>'
+        f'<tr><td style="padding:6px 12px;background:#f5f5f5;font-weight:bold;">Idioma</td><td style="padding:6px 12px;">{lead.get("language") or "-"}</td></tr>'
+        f'<tr><td style="padding:6px 12px;background:#f5f5f5;font-weight:bold;">Urgencia</td><td style="padding:6px 12px;color:{urgency_color};font-weight:bold;">{(lead.get("urgency") or "low").upper()}</td></tr>'
+        '</table>'
+        '<h3 style="color:#2A9D2A;margin-bottom:4px;">Resumen</h3>'
+        f'<p>{lead.get("summary","")}</p>'
+        '<h3 style="color:#2A9D2A;margin-bottom:4px;">Conversacion</h3>'
+        f'<div style="background:#f5f5f5;padding:12px;border-radius:8px;margin-bottom:8px;"><strong>Cliente:</strong><br/>{question}</div>'
+        f'<div style="background:#fff;border:1px solid #eee;padding:12px;border-radius:8px;"><strong>Bot:</strong><br/>{answer_html}</div>'
+        '<p style="color:#888;font-size:12px;margin-top:24px;">Lead capturado automaticamente por chatbot Dlimit IA. Contacto registrado tambien en Brevo CRM.</p>'
+        '</body></html>'
+    )
+    body = {
+        "sender": {"email": LEAD_SENDER_EMAIL, "name": LEAD_SENDER_NAME},
+        "to": [{"email": LEAD_NOTIFICATION_EMAIL, "name": "Equipo Comercial Dlimit"}],
+        "subject": f'[LEAD {(lead.get("urgency") or "low").upper()}] {lead.get("sector") or "Chatbot"} - {lead.get("email") or "Sin email"}',
+        "htmlContent": html,
+    }
+    status, resp = brevo_request("POST", "/smtp/email", body)
+    if status in (200, 201):
+        return True
+    print(f"[brevo_email] error {status}: {resp}", flush=True)
+    return False
+
+
+def process_lead_async(question, answer):
+    """Detecta lead y notifica. Thread separado para no bloquear respuesta."""
+    if not BREVO_API_KEY:
+        return
+    try:
+        lead = detect_lead(question, answer)
+        if not lead.get("is_lead"):
+            return
+        print(f"[LEAD detected] {lead}", flush=True)
+        if lead.get("email"):
+            cid = upsert_brevo_contact(lead)
+            print(f"[brevo_contact] upserted id={cid}", flush=True)
+        send_lead_email(lead, question, answer)
+        print(f"[brevo_email] sent to {LEAD_NOTIFICATION_EMAIL}", flush=True)
+    except Exception as e:
+        print(f"[process_lead_async] error: {e}", flush=True)
+
+
 app = Flask(__name__)
 
 
@@ -313,7 +468,10 @@ def api_chat():
         context_parts.append(f"({loc}) {pl.get('text','')}")
 
     if not points:
-        return jsonify({"answer": fallback_no_context(question), "sources": []})
+        answer_text = fallback_no_context(question)
+        if BREVO_API_KEY:
+            threading.Thread(target=process_lead_async, args=(question, answer_text), daemon=True).start()
+        return jsonify({"answer": answer_text, "sources": []})
 
     user_msg = (
         f"Customer message (respond in the SAME language as this message):\n"
@@ -328,8 +486,18 @@ def api_chat():
         system=SYSTEM_PROMPT,
         messages=[{"role": "user", "content": user_msg}],
     )
+    answer_text = resp.content[0].text
+
+    # Detectar lead y notificar en background (no bloquea la respuesta al cliente)
+    if BREVO_API_KEY:
+        threading.Thread(
+            target=process_lead_async,
+            args=(question, answer_text),
+            daemon=True,
+        ).start()
+
     return jsonify({
-        "answer": resp.content[0].text,
+        "answer": answer_text,
         "sources": sources,
         "tokens": {"in": resp.usage.input_tokens, "out": resp.usage.output_tokens},
         "model": CLAUDE_MODEL,
