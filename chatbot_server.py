@@ -18,6 +18,7 @@ import os
 import sys
 import json
 import threading
+import re
 import urllib.request
 import urllib.error
 from datetime import datetime, timezone
@@ -218,6 +219,41 @@ de uno en uno (no como formulario):
 5. Pais o region (para plazos y envio)
 
 Recordatorio RGPD si pide email: "Solo lo usamos para enviarte el presupuesto."
+
+
+ENVIO AUTOMATICO DE INFORMACION POR EMAIL:
+
+Cuando detectes interes concreto del cliente (cantidad mencionada, sector
+especifico, familia recomendada, intencion de compra clara), OFRECE
+ESPONTANEAMENTE el envio de informacion por email - no esperes a que el
+cliente lo pida. Frase tipo:
+
+  "Quieres que te envie el catalogo completo y la tarifa de precios por
+   email? Te lo mando ahora mismo y Ester, nuestra responsable comercial,
+   te llama en 24 h para condiciones especiales."
+
+Si el cliente acepta, pidele su email (uno solo, sin formulario):
+  "Perfecto, a que email te lo mando?"
+
+Cuando obtengas un email VALIDO en la conversacion y haya interes real,
+al FINAL de tu respuesta y EN UNA LINEA SEPARADA, incluye este marcador
+EXACTO:
+
+  [SEND_INFO_EMAIL: email@cliente.com]
+
+El sistema detecta automaticamente ese marcador y dispara el envio del
+email con catalogo + tarifa adjuntos. Ester ve la conversacion completa
+y llama al cliente en 24 h.
+
+REGLAS DEL MARCADOR (criticas):
+- Solo emitelo si el cliente ha dado un email valido y ha aceptado el envio.
+- Una vez emitido en una conversacion, NO lo vuelvas a emitir.
+- NUNCA inventes un email. Si el cliente no lo dio, pideselo, no inventes.
+- NUNCA emitas el marcador si el cliente NO ha aceptado el envio.
+- En la respuesta visible al cliente, confirma con frase breve:
+  "Perfecto, te lo envio ahora mismo a [email]. Ester te llama en 24 h."
+- El marcador se quita automaticamente del mensaje visible al cliente,
+  solo el sistema lo lee.
 
 ESCALADO A HUMANO:
 Escala en estos casos:
@@ -490,6 +526,27 @@ def api_chat():
         messages=[{"role": "user", "content": user_msg}],
     )
     answer_text = resp.content[0].text
+
+    # ─── Detectar marcador de envio automatico de catalogo+tarifa ───
+    _email_marker = re.search(r'\[SEND_INFO_EMAIL:\s*([^\]\s]+)\s*\]', answer_text)
+    if _email_marker:
+        _target_email = _email_marker.group(1).strip().rstrip('.,;:')
+        if "@" in _target_email and "." in _target_email.split("@")[-1]:
+            try:
+                send_info_email(
+                    client_email=_target_email,
+                    conversation_summary=(
+                        f"Pregunta del cliente:\n{question}\n\n"
+                        f"Respuesta del bot:\n{answer_text[:800]}"
+                    ),
+                    detected_language="es",
+                    source="chat",
+                    blocking=False,
+                )
+            except Exception:
+                pass  # No bloquear la respuesta si falla
+        # Quitar el marcador del mensaje visible al cliente
+        answer_text = re.sub(r'\[SEND_INFO_EMAIL:[^\]]*\]', '', answer_text).strip()
 
     # Detectar lead y notificar en background (no bloquea la respuesta al cliente)
     if BREVO_API_KEY:
