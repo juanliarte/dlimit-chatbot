@@ -765,6 +765,55 @@ def admin_ingest_chunks():
     return jsonify({"ok": True, "ingested": len(points), "errors": errors})
 
 
+@app.route("/admin/purge_filtered", methods=["POST"])
+def admin_purge_filtered():
+    """Borra puntos de Qdrant que coincidan con un filtro de payload.
+    Protegido por ADMIN_EXPORT_KEY.
+    Body JSON: {"filters": {"doc_type": "playbook"}, "dry_run": false}
+    Para OR sobre varios valores: {"filters": {"doc_type": ["playbook", "old_doc"]}}
+    Devuelve los puntos borrados (count). Operacion irreversible."""
+    key = (request.args.get("key") or "").strip()
+    if not ADMIN_EXPORT_KEY or key != ADMIN_EXPORT_KEY:
+        return jsonify({"error": "unauthorized"}), 401
+
+    data = request.get_json(force=True) or {}
+    filters = data.get("filters", {})
+    dry_run = bool(data.get("dry_run", False))
+    if not filters or not isinstance(filters, dict):
+        return jsonify({"error": "no filters"}), 400
+
+    must = []
+    has_list = False
+    for field, value in filters.items():
+        if isinstance(value, list):
+            has_list = True
+            for v in value:
+                must.append(FieldCondition(key=field, match=MatchValue(value=v)))
+        else:
+            must.append(FieldCondition(key=field, match=MatchValue(value=value)))
+
+    qfilter = Filter(should=must) if has_list else Filter(must=must)
+
+    try:
+        count_resp = qclient.count(
+            collection_name=COLLECTION,
+            count_filter=qfilter,
+            exact=True,
+        )
+        n = count_resp.count
+        if dry_run:
+            return jsonify({"ok": True, "dry_run": True, "matched": n, "filters": filters})
+
+        qclient.delete(
+            collection_name=COLLECTION,
+            points_selector=qfilter,
+            wait=True,
+        )
+        return jsonify({"ok": True, "deleted": n, "filters": filters})
+    except Exception as e:
+        return jsonify({"ok": False, "error": str(e), "filters": filters}), 500
+
+
 @app.route("/healthz", methods=["GET"])
 def healthz():
     """Endpoint publico de salud para monitorizacion (no expone datos)."""
