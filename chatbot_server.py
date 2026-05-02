@@ -689,6 +689,82 @@ def admin_stats_endpoint():
     return jsonify(tracking_stats())
 
 
+@app.route("/admin/ingest_chunks", methods=["POST"])
+def admin_ingest_chunks():
+    """Ingest text chunks into Qdrant. Protected by ADMIN_EXPORT_KEY.
+    Body JSON: {"chunks": [{"text", "family", "title", "source",
+                            "source_path", "doc_type", "layer", "page", "id"}]}
+    Each chunk gets dense (Voyage) + sparse (BM25) vectors.
+    Idempotent: same family+doc_type produces same id (upsert overwrites)."""
+    key = (request.args.get("key") or "").strip()
+    if not ADMIN_EXPORT_KEY or key != ADMIN_EXPORT_KEY:
+        return jsonify({"error": "unauthorized"}), 401
+
+    from qdrant_client.models import PointStruct
+    import uuid
+
+    data = request.get_json(force=True) or {}
+    chunks = data.get("chunks", [])
+    if not chunks or not isinstance(chunks, list):
+        return jsonify({"error": "no chunks"}), 400
+
+    points = []
+    errors = []
+    for i, chunk in enumerate(chunks):
+        try:
+            text = (chunk.get("text") or "").strip()
+            if not text:
+                errors.append({"i": i, "err": "empty text"})
+                continue
+            family = (chunk.get("family") or "").strip()
+            doc_type = chunk.get("doc_type", "playbook")
+            layer = chunk.get("layer", "publica")
+
+            dense = voyage.embed(
+                [text], model=DENSE_MODEL, input_type="document",
+                truncation=True
+            ).embeddings[0]
+            sparse_emb = list(bm25.embed([text]))[0]
+            sparse_vec = SparseVector(
+                indices=sparse_emb.indices.tolist(),
+                values=sparse_emb.values.tolist(),
+            )
+            payload = {
+                "text": text,
+                "title": chunk.get("title") or f"Playbook {family}",
+                "source": chunk.get("source") or f"playbook_{family}.md",
+                "source_path": chunk.get("source_path", ""),
+                "doc_type": doc_type,
+                "family": family,
+                "layer": layer,
+                "page": chunk.get("page", 1),
+            }
+            point_id = chunk.get("id") or str(
+                uuid.uuid5(uuid.NAMESPACE_URL, f"{doc_type}-{family}")
+            )
+            points.append(PointStruct(
+                id=point_id,
+                vector={
+                    DENSE_VECTOR_NAME: dense,
+                    SPARSE_VECTOR_NAME: sparse_vec,
+                },
+                payload=payload,
+            ))
+        except Exception as e:
+            errors.append({"i": i, "err": str(e)})
+
+    if not points:
+        return jsonify({"ok": False, "ingested": 0, "errors": errors}), 400
+
+    try:
+        qclient.upsert(collection_name=COLLECTION, points=points, wait=True)
+    except Exception as e:
+        return jsonify({"ok": False, "ingested": 0,
+                        "upsert_error": str(e), "errors": errors}), 500
+
+    return jsonify({"ok": True, "ingested": len(points), "errors": errors})
+
+
 @app.route("/healthz", methods=["GET"])
 def healthz():
     """Endpoint publico de salud para monitorizacion (no expone datos)."""
