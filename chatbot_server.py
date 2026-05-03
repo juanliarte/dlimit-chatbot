@@ -1036,10 +1036,40 @@ HTML_PAGE = r"""<!doctype html>
   </form>
 </div>
 <script>
+// ============================================================
+// i18n del frontend (v4 - 3 mayo 2026)
+// El widget pasa ?lang=es|en al cargar el iframe. Aplicamos los
+// textos UI (saludo, placeholder, aria-label) ANTES de cualquier
+// otra cosa, para que el visitante anglofono no vea espanol.
+// ============================================================
+const __DLIMIT_PARAMS = new URLSearchParams(location.search);
+const __DLIMIT_LANG = (__DLIMIT_PARAMS.get('lang') || 'es').toLowerCase().startsWith('en') ? 'en' : 'es';
+const __DLIMIT_I18N = {
+  es: {
+    greet: 'Asesor comercial <strong>Dlimit</strong>. Te ayudo a elegir poste, pedir presupuesto o resolver dudas tecnicas. Que necesitas?',
+    placeholder: 'Escribe tu pregunta...',
+    sendAria: 'Enviar',
+    error: 'Error: '
+  },
+  en: {
+    greet: 'Hi, I am the <strong>Dlimit</strong> sales assistant. I can help you choose a stanchion, request a quote or solve technical questions. What do you need?',
+    placeholder: 'Type your question...',
+    sendAria: 'Send',
+    error: 'Error: '
+  }
+};
+const __T = __DLIMIT_I18N[__DLIMIT_LANG];
+document.documentElement.lang = __DLIMIT_LANG;
+
 const messages = document.getElementById('messages');
 const q = document.getElementById('q');
 const send = document.getElementById('send');
 const empty = document.querySelector('.empty');
+
+// Aplicar i18n a los elementos hardcoded en el HTML
+if (empty) empty.innerHTML = __T.greet;
+if (q) q.placeholder = __T.placeholder;
+if (send) send.setAttribute('aria-label', __T.sendAria);
 
 function add(role, html, cls=''){
   const d = document.createElement('div');
@@ -1100,7 +1130,7 @@ async function ask(e){
     }
   }catch(err){
     thinking.remove();
-    add('bot', '<em>Error: '+err.message+'</em>');
+    add('bot', '<em>'+__T.error+err.message+'</em>');
   }
   send.disabled=false;
   q.focus();
