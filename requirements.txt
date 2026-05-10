@@ -5,3 +5,4 @@ voyageai==0.3.7
 anthropic==0.97.0
 qdrant-client[fastembed]==1.17.1
 fastembed==0.7.4
+beautifulsoup4==4.12.3
